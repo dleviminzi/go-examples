@@ -12,10 +12,13 @@ type Ex struct {
 	MediaType string
 	Name      string
 	Duration  int
+	External  string
 }
 
+var enrichedToProcess = make(chan rxgo.Item)
+
 func main() {
-	ch := make(chan rxgo.Item)
+	rawToEnrich := make(chan rxgo.Item)
 	go func() {
 		mediaTypes := []string{"call", "chat", "email"}
 		names := []string{"daniel", "laura", "jonathan", "harel", "jude", "landon", "brandon", "azeez", "tyler", "simon", "max", "moni", "jacob"}
@@ -27,23 +30,32 @@ func main() {
 				Duration:  i * 10,
 			}
 
-			ch <- rxgo.Of(ex)
+			rawToEnrich <- rxgo.Of(ex)
 		}
 
-		close(ch)
+		close(rawToEnrich)
 	}()
+
 	// Create a regular Observable
-	observable := rxgo.FromChannel(ch).
-		Filter(verify).
-		Map(process).
-		BufferWithCount(3)
+	ob1 := rxgo.FromChannel(rawToEnrich).
+		BufferWithCount(3).
+		Map(enrich)
+
+	go func() {
+		for range ob1.Observe() {
+		}
+		close(enrichedToProcess)
+	}()
+
+	observable := rxgo.FromChannel(enrichedToProcess).
+		Map(process)
 
 	// observe
 	for item := range observable.Observe() {
 		if item.Error() {
 			fmt.Println("do something. error :: ", item.E)
 		}
-		fmt.Println("items are :: ", item.V)
+		fmt.Println("item :: ", item.V)
 	}
 }
 
@@ -52,6 +64,18 @@ func verify(i any) bool {
 		return false
 	}
 	return true
+}
+
+func enrich(ctx context.Context, i any) (any, error) {
+	exArr := i.([]any)
+	for _, x := range exArr {
+		z := x.(Ex)
+		z.External = "populated"
+
+		enrichedToProcess <- rxgo.Of(z)
+	}
+
+	return i, nil
 }
 
 func process(ctx context.Context, i any) (any, error) {
